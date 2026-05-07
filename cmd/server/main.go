@@ -10,6 +10,7 @@ import (
 
 	"lan-drop/internal/hub"
 	"lan-drop/internal/protocol"
+	"lan-drop/internal/discovery"
 )
 
 func main() {
@@ -20,6 +21,7 @@ func main() {
 
 	h := hub.New()
 	go h.Run()
+	go discovery.ListenAndRespond("8080")
 
 	listener, err := net.Listen("tcp", port)
 	if err != nil {

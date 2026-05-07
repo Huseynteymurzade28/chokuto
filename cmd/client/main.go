@@ -8,16 +8,30 @@ import (
 	"net"
 	"os"
 	"strings"
+	"time"
 
+	"lan-drop/internal/discovery"
 	"lan-drop/internal/protocol"
 )
 
 func main() {
-	if len(os.Args) < 3 {
-		log.Fatal("Usage: client <username> <serverAddr>")
+	if len(os.Args) < 2 {
+		log.Fatal("Usage: client <username>")
 	}
 	username := os.Args[1]
-	serverAddr := os.Args[2]
+
+	var serverAddr string
+	if len(os.Args) >= 3 {
+		serverAddr = os.Args[2]
+	} else {
+		fmt.Println("server aranıyor...")
+		addr, err := discovery.FindServer(3 * time.Second)
+		if err != nil {
+			log.Fatal("server bulunamadı, manuel gir: client <username> <serverAddr>")
+		}
+		fmt.Println("server bulundu:", addr)
+		serverAddr = addr
+	}
 
 	conn, err := net.Dial("tcp", serverAddr)
 	if err != nil {
