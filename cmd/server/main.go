@@ -3,16 +3,21 @@ package main
 import (
 	"bufio"
 	"fmt"
+	"io"
 	"log"
 	"net"
+	"os"
 
 	"lan-drop/internal/hub"
 	"lan-drop/internal/protocol"
 )
 
-const port = ":8080"
-
 func main() {
+	port := ":8080"
+	if len(os.Args) > 1 {
+		port = ":" + os.Args[1]
+	}
+
 	h := hub.New()
 	go h.Run()
 
@@ -22,7 +27,7 @@ func main() {
 	}
 	defer listener.Close()
 
-	fmt.Println("Server Started!",port)
+	fmt.Println("Server Started!", port)
 
 	for {
 		conn, err := listener.Accept()
@@ -32,8 +37,8 @@ func main() {
 		}
 		go handleConn(conn, h)
 	}
-	
 }
+
 func handleConn(conn net.Conn, h *hub.Hub) {
 	defer conn.Close()
 
@@ -42,10 +47,13 @@ func handleConn(conn net.Conn, h *hub.Hub) {
 		return
 	}
 	username := scanner.Text()
+
 	client := &hub.Client{
 		Username: username,
 		Send:     make(chan protocol.Message, 32),
+		Conn:     conn,
 	}
+
 	h.Register(client)
 	defer h.Unregister(client)
 
@@ -63,17 +71,50 @@ func handleConn(conn net.Conn, h *hub.Hub) {
 
 	for scanner.Scan() {
 		line := scanner.Text()
+
 		msg, err := protocol.Decode(line)
 		if err != nil {
 			log.Printf("failed to decode: %v", err)
 			continue
 		}
+
+		if msg.Type == protocol.TypeFile {
+			handleFile(conn, h, line)
+			continue
+		}
+
 		h.Broadcast(msg)
 	}
 
 	h.Broadcast(protocol.Message{
 		Type: protocol.TypeLeave,
 		From: username,
-		Body: username + " leaved",
+		Body: username + " left",
 	})
+}
+
+func handleFile(conn net.Conn, h *hub.Hub, headerLine string) {
+	fh, err := protocol.DecodeFileHeader(headerLine)
+	if err != nil {
+		log.Printf("failed to decode file header: %v", err)
+		return
+	}
+
+	buf := make([]byte, fh.Size)
+	_, err = io.ReadFull(conn, buf)
+	if err != nil {
+		log.Printf("failed to read file data: %v", err)
+		return
+	}
+
+	clients := h.Clients()
+	for _, c := range clients {
+		if c.Conn == conn {
+			continue
+		}
+		fmt.Fprint(c.Conn, fh.Encode())
+		c.Conn.Write(buf)
+	}
+
+	log.Printf("file transfer done: %s (%d bytes)", fh.Filename, fh.Size)
 }
