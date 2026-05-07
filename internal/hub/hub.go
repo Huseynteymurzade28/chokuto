@@ -2,30 +2,32 @@ package hub
 
 import (
 	"net"
-	"lan-drop/internal/protocol"
 )
 
 type Client struct {
 	Username string
-	Send     chan protocol.Message
+	Send     chan []byte
 	Conn     net.Conn
 }
 
+type envelope struct {
+	data    []byte
+	exclude *Client
+}
+
 type Hub struct {
-	clients      map[*Client]bool
-	broadcast    chan protocol.Message
-	register     chan *Client
-	unregister   chan *Client
-	clientsQuery chan chan []*Client
+	clients    map[*Client]bool
+	broadcast  chan envelope
+	register   chan *Client
+	unregister chan *Client
 }
 
 func New() *Hub {
 	return &Hub{
-		clients:      make(map[*Client]bool),
-		broadcast:    make(chan protocol.Message),
-		register:     make(chan *Client),
-		unregister:   make(chan *Client),
-		clientsQuery: make(chan chan []*Client),
+		clients:    make(map[*Client]bool),
+		broadcast:  make(chan envelope, 64),
+		register:   make(chan *Client),
+		unregister: make(chan *Client),
 	}
 }
 
@@ -37,14 +39,12 @@ func (h *Hub) Unregister(c *Client) {
 	h.unregister <- c
 }
 
-func (h *Hub) Broadcast(m protocol.Message) {
-	h.broadcast <- m
+func (h *Hub) Broadcast(data []byte) {
+	h.broadcast <- envelope{data: data}
 }
 
-func (h *Hub) Clients() []*Client {
-	result := make(chan []*Client)
-	h.clientsQuery <- result
-	return <-result
+func (h *Hub) BroadcastExcluding(data []byte, exclude *Client) {
+	h.broadcast <- envelope{data: data, exclude: exclude}
 }
 
 func (h *Hub) Run() {
@@ -59,17 +59,13 @@ func (h *Hub) Run() {
 				close(c.Send)
 			}
 
-		case msg := <-h.broadcast:
+		case env := <-h.broadcast:
 			for c := range h.clients {
-				c.Send <- msg
+				if env.exclude != nil && c == env.exclude {
+					continue
+				}
+				c.Send <- env.data
 			}
-
-		case result := <-h.clientsQuery:
-			list := make([]*Client, 0, len(h.clients))
-			for c := range h.clients {
-				list = append(list, c)
-			}
-			result <- list
 		}
 	}
 }

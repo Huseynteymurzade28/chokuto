@@ -16,7 +16,7 @@ func ListenAndRespond(chatPort string) {
 	addr := &net.UDPAddr{Port: discoverPort}
 	conn, err := net.ListenUDP("udp", addr)
 	if err != nil {
-		fmt.Println("discovery dinlenemedi:", err)
+		fmt.Println("discovery listen failed:", err)
 		return
 	}
 	defer conn.Close()
@@ -56,12 +56,12 @@ func FindServer(timeout time.Duration) (string, error) {
 	buf := make([]byte, 1024)
 	n, remoteAddr, err := conn.ReadFromUDP(buf)
 	if err != nil {
-		return "", fmt.Errorf("server bulunamadı")
+		return "", fmt.Errorf("server not found")
 	}
 
 	msg := string(buf[:n])
 	if len(msg) <= len(hereMsg)+1 {
-		return "", fmt.Errorf("geçersiz cevap")
+		return "", fmt.Errorf("invalid response")
 	}
 
 	port := msg[len(hereMsg)+1:]

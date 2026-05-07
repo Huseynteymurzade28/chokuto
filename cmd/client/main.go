@@ -16,7 +16,7 @@ import (
 
 func main() {
 	if len(os.Args) < 2 {
-		log.Fatal("Usage: client <username>")
+		log.Fatal("usage: client <username> [serverAddr]")
 	}
 	username := os.Args[1]
 
@@ -24,12 +24,12 @@ func main() {
 	if len(os.Args) >= 3 {
 		serverAddr = os.Args[2]
 	} else {
-		fmt.Println("server aranıyor...")
+		fmt.Println("searching for server...")
 		addr, err := discovery.FindServer(3 * time.Second)
 		if err != nil {
-			log.Fatal("server bulunamadı, manuel gir: client <username> <serverAddr>")
+			log.Fatal("server not found, enter manually: client <username> <serverAddr>")
 		}
-		fmt.Println("server bulundu:", addr)
+		fmt.Println("server found:", addr)
 		serverAddr = addr
 	}
 
@@ -51,10 +51,10 @@ func main() {
 		}
 
 		if strings.HasPrefix(line, "/send ") {
-			filepath := strings.TrimPrefix(line, "/send ")
-			err := sendFile(conn, username, filepath)
+			filePath := strings.TrimPrefix(line, "/send ")
+			err := sendFile(conn, username, filePath)
 			if err != nil {
-				log.Println("dosya gönderilemedi:", err)
+				log.Println("file send failed:", err)
 			}
 			continue
 		}
@@ -73,7 +73,7 @@ func readLoop(conn net.Conn) {
 	for {
 		line, err := reader.ReadString('\n')
 		if err != nil {
-			log.Println("bağlantı kesildi")
+			log.Println("connection closed")
 			os.Exit(0)
 		}
 
@@ -94,17 +94,17 @@ func readLoop(conn net.Conn) {
 			buf := make([]byte, size)
 			_, err := io.ReadFull(reader, buf)
 			if err != nil {
-				log.Println("dosya okunamadı:", err)
+				log.Println("failed to read file:", err)
 				continue
 			}
 
 			err = os.WriteFile(filename, buf, 0644)
 			if err != nil {
-				log.Println("dosya kaydedilemedi:", err)
+				log.Println("failed to save file:", err)
 				continue
 			}
 
-			fmt.Printf("*** dosya alındı: %s (%d bytes)\n", filename, size)
+			fmt.Printf("*** file received: %s (%d bytes)\n", filename, size)
 			continue
 		}
 
@@ -119,8 +119,8 @@ func readLoop(conn net.Conn) {
 	}
 }
 
-func sendFile(conn net.Conn, username, filepath string) error {
-	f, err := os.Open(filepath)
+func sendFile(conn net.Conn, username, filePath string) error {
+	f, err := os.Open(filePath)
 	if err != nil {
 		return err
 	}
