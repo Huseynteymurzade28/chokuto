@@ -10,13 +10,12 @@ import (
 	"lan-drop/internal/protocol"
 )
 
-const serverAddr = "localhost:8080"
-
 func main() {
-	if len(os.Args) < 2 {
+	if len(os.Args) < 3 {
 		log.Fatal("Usage: client <username>")
 	}
 	username := os.Args[1]
+	serverAddr := os.Args[2]
 	conn, err := net.Dial("tcp", serverAddr)
 	if err != nil {
 		log.Fatal(err)
