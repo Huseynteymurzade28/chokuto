@@ -7,6 +7,7 @@ import (
 	"log"
 	"net"
 	"os"
+	"sort"
 	"strings"
 
 	"lan-drop/internal/discovery"
@@ -21,7 +22,6 @@ func main() {
 	}
 
 	h := hub.New()
-	go h.Run()
 	go discovery.ListenAndRespond("8080")
 
 	listener, err := net.Listen("tcp", port)
@@ -42,6 +42,16 @@ func main() {
 	}
 }
 
+func broadcastUserList(h *hub.Hub) {
+	names := h.GetUsernames()
+	sort.Strings(names)
+	h.Broadcast([]byte(protocol.Message{
+		Type: protocol.TypeUserList,
+		From: "server",
+		Body: strings.Join(names, ","),
+	}.Encode()))
+}
+
 func handleConn(conn net.Conn, h *hub.Hub) {
 	defer conn.Close()
 
@@ -55,18 +65,27 @@ func handleConn(conn net.Conn, h *hub.Hub) {
 
 	client := &hub.Client{
 		Username: username,
-		Send:     make(chan []byte, 32),
+		Send:     make(chan []byte, 64),
 		Conn:     conn,
 	}
 
 	h.Register(client)
-	defer h.Unregister(client)
+	defer func() {
+		h.Unregister(client)
+		h.Broadcast([]byte(protocol.Message{
+			Type: protocol.TypeLeave,
+			From: username,
+			Body: username + " left",
+		}.Encode()))
+		broadcastUserList(h)
+	}()
 
 	h.Broadcast([]byte(protocol.Message{
 		Type: protocol.TypeJoin,
 		From: username,
 		Body: username + " joined",
 	}.Encode()))
+	broadcastUserList(h)
 
 	go func() {
 		for data := range client.Send {
@@ -89,19 +108,13 @@ func handleConn(conn net.Conn, h *hub.Hub) {
 			continue
 		}
 
-		if msg.Type == protocol.TypeFile {
+		switch msg.Type {
+		case protocol.TypeFile:
 			handleFile(client, reader, h, line)
-			continue
+		default:
+			h.BroadcastExcluding([]byte(msg.Encode()), client)
 		}
-
-		h.Broadcast([]byte(msg.Encode()))
 	}
-
-	h.Broadcast([]byte(protocol.Message{
-		Type: protocol.TypeLeave,
-		From: username,
-		Body: username + " left",
-	}.Encode()))
 }
 
 func handleFile(client *hub.Client, reader *bufio.Reader, h *hub.Hub, headerLine string) {

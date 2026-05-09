@@ -7,6 +7,7 @@ import (
 	"net"
 	"os"
 	"path/filepath"
+	"sort"
 	"strings"
 	"time"
 
@@ -18,20 +19,44 @@ import (
 	"lan-drop/internal/protocol"
 )
 
+const sidebarW = 22
+
 // ── styles ────────────────────────────────────────────────────────────────────
 
 var (
-	activeTabSt   = lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("39")).Underline(true).Padding(0, 1)
+	activeTabSt  = lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("39")).Underline(true).Padding(0, 1)
 	inactiveTabSt = lipgloss.NewStyle().Foreground(lipgloss.Color("240")).Padding(0, 1)
-	titleSt       = lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("39"))
-	dimSt         = lipgloss.NewStyle().Foreground(lipgloss.Color("240"))
-	joinSt        = lipgloss.NewStyle().Foreground(lipgloss.Color("82")).Italic(true)
-	leaveSt       = lipgloss.NewStyle().Foreground(lipgloss.Color("203")).Italic(true)
-	otherSt       = lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("117"))
-	meSt          = lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("39"))
-	fileSt        = lipgloss.NewStyle().Foreground(lipgloss.Color("220"))
-	errSt         = lipgloss.NewStyle().Foreground(lipgloss.Color("203"))
+	titleSt      = lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("39"))
+	dimSt        = lipgloss.NewStyle().Foreground(lipgloss.Color("240"))
+	joinSt       = lipgloss.NewStyle().Foreground(lipgloss.Color("82")).Italic(true)
+	leaveSt      = lipgloss.NewStyle().Foreground(lipgloss.Color("203")).Italic(true)
+	otherSt      = lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("117"))
+	meSt         = lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("39"))
+	fileSt       = lipgloss.NewStyle().Foreground(lipgloss.Color("220"))
+	errSt        = lipgloss.NewStyle().Foreground(lipgloss.Color("203"))
+	onlineDotSt  = lipgloss.NewStyle().Foreground(lipgloss.Color("82"))
+	offlineDotSt = lipgloss.NewStyle().Foreground(lipgloss.Color("240"))
+	typingSt     = lipgloss.NewStyle().Foreground(lipgloss.Color("240")).Italic(true)
+	sideHeadSt   = lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("252"))
+	youTagSt     = lipgloss.NewStyle().Foreground(lipgloss.Color("240"))
 )
+
+var palette = []string{"39", "213", "82", "220", "205", "87", "214", "51"}
+
+func userColor(name string) lipgloss.Color {
+	var h int
+	for _, c := range name {
+		h = h*31 + int(c)
+	}
+	if h < 0 {
+		h = -h
+	}
+	return lipgloss.Color(palette[h%len(palette)])
+}
+
+func styledName(name string) string {
+	return lipgloss.NewStyle().Bold(true).Foreground(userColor(name)).Render(name)
+}
 
 // ── types ─────────────────────────────────────────────────────────────────────
 
@@ -43,7 +68,7 @@ const (
 )
 
 type chatLine struct {
-	kind string // me | msg | join | leave | file | err | sys
+	kind string
 	from string
 	body string
 	ts   time.Time
@@ -56,10 +81,12 @@ type fileEntry struct {
 	ts       time.Time
 }
 
-// netEvent is produced by the background network goroutine.
 type netEvent struct {
-	line chatLine
-	file *fileEntry // non-nil when a file was received
+	line         chatLine
+	file         *fileEntry
+	users        []string
+	usersUpdated bool
+	typing       string
 }
 
 type fileSentMsg struct {
@@ -69,21 +96,27 @@ type fileSentMsg struct {
 
 type errMsg struct{ err error }
 
+type tickMsg time.Time
+
 // ── model ─────────────────────────────────────────────────────────────────────
 
 type model struct {
-	tab      tabIdx
-	lines    []chatLine
-	files    []fileEntry
-	vp       viewport.Model
-	input    textinput.Model
-	conn     net.Conn
-	username string
-	server   string
-	eventCh  chan netEvent
-	width    int
-	height   int
-	ready    bool
+	tab            tabIdx
+	lines          []chatLine
+	files          []fileEntry
+	vp             viewport.Model
+	input          textinput.Model
+	conn           net.Conn
+	username       string
+	server         string
+	eventCh        chan netEvent
+	width          int
+	height         int
+	ready          bool
+	users          []string
+	typingUsers    map[string]time.Time
+	lastTypingSent time.Time
+	typingFrame    int
 }
 
 func newModel(conn net.Conn, username, server string, eventCh chan netEvent) model {
@@ -92,20 +125,27 @@ func newModel(conn net.Conn, username, server string, eventCh chan netEvent) mod
 	ti.Focus()
 	ti.CharLimit = 1000
 	return model{
-		conn:     conn,
-		username: username,
-		server:   server,
-		eventCh:  eventCh,
-		input:    ti,
+		conn:        conn,
+		username:    username,
+		server:      server,
+		eventCh:     eventCh,
+		input:       ti,
+		typingUsers: make(map[string]time.Time),
 	}
 }
 
 func (m model) Init() tea.Cmd {
-	return tea.Batch(textinput.Blink, waitNet(m.eventCh))
+	return tea.Batch(textinput.Blink, waitNet(m.eventCh), doTick())
 }
 
 func waitNet(ch <-chan netEvent) tea.Cmd {
 	return func() tea.Msg { return <-ch }
+}
+
+func doTick() tea.Cmd {
+	return tea.Tick(500*time.Millisecond, func(t time.Time) tea.Msg {
+		return tickMsg(t)
+	})
 }
 
 // ── update ────────────────────────────────────────────────────────────────────
@@ -116,16 +156,32 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	switch msg := msg.(type) {
 	case tea.WindowSizeMsg:
 		m.width, m.height = msg.Width, msg.Height
-		vpH := m.height - 5 // header(2) + input(2) + status(1)
+		vpH := m.height - 6
 		if vpH < 1 {
 			vpH = 1
 		}
-		m.vp = viewport.New(m.width, vpH)
+		vpW := m.width
+		if m.hasSidebar() {
+			vpW = m.width - sidebarW - 1
+		}
+		m.vp = viewport.New(vpW, vpH)
 		m.vp.SetContent(m.chatContent())
 		m.vp.GotoBottom()
 		m.ready = true
 
+	case tickMsg:
+		m.typingFrame = (m.typingFrame + 1) % 3
+		now := time.Now()
+		for name, t := range m.typingUsers {
+			if now.Sub(t) >= 3*time.Second {
+				delete(m.typingUsers, name)
+			}
+		}
+		cmds = append(cmds, doTick())
+
 	case tea.KeyMsg:
+		prevVal := m.input.Value()
+
 		switch msg.String() {
 		case "ctrl+c", "ctrl+q":
 			return m, tea.Quit
@@ -159,7 +215,25 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			}
 		}
 
+		// send typing indicator (debounced to once per second)
+		if m.tab == chatTab && m.input.Value() != prevVal && m.input.Value() != "" {
+			if time.Since(m.lastTypingSent) > time.Second {
+				m.lastTypingSent = time.Now()
+				fmt.Fprint(m.conn, protocol.Message{
+					Type: protocol.TypeTyping,
+					From: m.username,
+					Body: "",
+				}.Encode())
+			}
+		}
+
 	case netEvent:
+		if msg.usersUpdated {
+			m.users = msg.users
+		}
+		if msg.typing != "" {
+			m.typingUsers[msg.typing] = time.Now()
+		}
 		if msg.file != nil {
 			m.files = append(m.files, *msg.file)
 			m.lines = append(m.lines, chatLine{
@@ -168,10 +242,11 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				body: fmt.Sprintf("sent %s (%s)", msg.file.filename, fmtSize(msg.file.size)),
 				ts:   msg.file.ts,
 			})
-		} else {
+			m.refreshVP()
+		} else if msg.line.kind != "" {
 			m.lines = append(m.lines, msg.line)
+			m.refreshVP()
 		}
-		m.refreshVP()
 		cmds = append(cmds, waitNet(m.eventCh))
 
 	case fileSentMsg:
@@ -198,6 +273,10 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 // ── view ──────────────────────────────────────────────────────────────────────
 
+func (m model) hasSidebar() bool {
+	return m.width >= 60
+}
+
 func (m model) View() string {
 	if !m.ready {
 		return "connecting..."
@@ -205,6 +284,7 @@ func (m model) View() string {
 	return strings.Join([]string{
 		m.viewHeader(),
 		m.viewContent(),
+		m.viewTyping(),
 		m.viewInput(),
 		m.viewStatus(),
 	}, "\n")
@@ -219,8 +299,22 @@ func (m model) viewHeader() string {
 		chatLabel = inactiveTabSt.Render("Chat")
 		filesLabel = activeTabSt.Render("Files")
 	}
+
 	left := titleSt.Render("lan-drop") + dimSt.Render("  │  ") + chatLabel + dimSt.Render("·") + filesLabel
-	line := lipgloss.NewStyle().Width(m.width).Render(left)
+
+	right := ""
+	if n := len(m.users); n > 0 {
+		dot := onlineDotSt.Render("●")
+		right = dot + dimSt.Render(fmt.Sprintf(" %d online  ", n))
+	}
+
+	lw := lipgloss.Width(left)
+	rw := lipgloss.Width(right)
+	gap := m.width - lw - rw
+	if gap < 0 {
+		gap = 0
+	}
+	line := left + strings.Repeat(" ", gap) + right
 	border := dimSt.Render(strings.Repeat("─", m.width))
 	return line + "\n" + border
 }
@@ -229,7 +323,93 @@ func (m model) viewContent() string {
 	if m.tab == filesTab {
 		return m.viewFiles()
 	}
-	return m.vp.View()
+	if !m.hasSidebar() {
+		return m.vp.View()
+	}
+	return m.viewChatWithSidebar()
+}
+
+func (m model) viewChatWithSidebar() string {
+	chatWidth := m.width - sidebarW - 1
+
+	vpLines := strings.Split(m.vp.View(), "\n")
+	sideLines := m.buildSidebarLines()
+
+	var sb strings.Builder
+	for i := 0; i < m.vp.Height; i++ {
+		cl := ""
+		if i < len(vpLines) {
+			cl = vpLines[i]
+		}
+		// pad to exact chat width
+		vis := lipgloss.Width(cl)
+		if vis < chatWidth {
+			cl += strings.Repeat(" ", chatWidth-vis)
+		}
+
+		sl := ""
+		if i < len(sideLines) {
+			sl = sideLines[i]
+		}
+
+		sb.WriteString(cl)
+		sb.WriteString(dimSt.Render("│"))
+		sb.WriteString(sl)
+		if i < m.vp.Height-1 {
+			sb.WriteByte('\n')
+		}
+	}
+	return sb.String()
+}
+
+func (m model) buildSidebarLines() []string {
+	lines := make([]string, 0, m.vp.Height)
+
+	count := fmt.Sprintf(" Online (%d)", len(m.users))
+	lines = append(lines, sideHeadSt.Render(count))
+	lines = append(lines, dimSt.Render(" "+strings.Repeat("─", sidebarW-2)))
+
+	for _, u := range m.users {
+		dot := onlineDotSt.Render("●")
+		name := lipgloss.NewStyle().Bold(true).Foreground(userColor(u)).Render(u)
+		you := ""
+		if u == m.username {
+			you = youTagSt.Render(" (you)")
+		}
+		lines = append(lines, " "+dot+" "+name+you)
+	}
+
+	for len(lines) < m.vp.Height {
+		lines = append(lines, "")
+	}
+	return lines
+}
+
+func (m model) viewTyping() string {
+	var who []string
+	now := time.Now()
+	for name, t := range m.typingUsers {
+		if now.Sub(t) < 3*time.Second {
+			who = append(who, name)
+		}
+	}
+	if len(who) == 0 {
+		return ""
+	}
+
+	sort.Strings(who)
+	dots := []string{".", "..", "..."}[m.typingFrame]
+
+	var text string
+	switch len(who) {
+	case 1:
+		text = styledName(who[0]) + typingSt.Render(" is typing"+dots)
+	case 2:
+		text = styledName(who[0]) + typingSt.Render(" & ") + styledName(who[1]) + typingSt.Render(" are typing"+dots)
+	default:
+		text = typingSt.Render(fmt.Sprintf("%d people are typing%s", len(who), dots))
+	}
+	return " " + text
 }
 
 func (m model) viewFiles() string {
@@ -272,7 +452,8 @@ func (m model) viewInput() string {
 }
 
 func (m model) viewStatus() string {
-	left := dimSt.Render(" " + m.username + "@" + m.server)
+	userPart := lipgloss.NewStyle().Bold(true).Foreground(userColor(m.username)).Render(m.username)
+	left := " " + userPart + dimSt.Render("@"+m.server)
 	right := dimSt.Render("tab: switch  pgup/dn: scroll  ctrl+q: quit ")
 	gap := m.width - lipgloss.Width(left) - lipgloss.Width(right)
 	if gap < 0 {
@@ -314,7 +495,8 @@ func renderChatLine(l chatLine) string {
 	case "me":
 		return ts + " " + meSt.Render(l.from) + sep + l.body
 	case "msg":
-		return ts + " " + otherSt.Render(l.from) + sep + l.body
+		name := lipgloss.NewStyle().Bold(true).Foreground(userColor(l.from)).Render(l.from)
+		return ts + " " + name + sep + l.body
 	case "file":
 		return ts + " " + fileSt.Render("⬇ "+l.from+": "+l.body)
 	case "err":
@@ -397,18 +579,25 @@ func startNetworkReader(conn net.Conn, username string, eventCh chan<- netEvent)
 			continue
 		}
 
-		// skip echo of own messages
-		if msg.Type == protocol.TypeMessage && msg.From == username {
-			continue
-		}
-
 		switch msg.Type {
 		case protocol.TypeJoin:
 			eventCh <- netEvent{line: chatLine{kind: "join", from: msg.From, body: msg.Body, ts: time.Now()}}
 		case protocol.TypeLeave:
 			eventCh <- netEvent{line: chatLine{kind: "leave", from: msg.From, body: msg.Body, ts: time.Now()}}
 		case protocol.TypeMessage:
+			if msg.From == username {
+				continue
+			}
 			eventCh <- netEvent{line: chatLine{kind: "msg", from: msg.From, body: msg.Body, ts: time.Now()}}
+		case protocol.TypeTyping:
+			eventCh <- netEvent{typing: msg.From}
+		case protocol.TypeUserList:
+			body := strings.TrimSpace(msg.Body)
+			var users []string
+			if body != "" {
+				users = strings.Split(body, ",")
+			}
+			eventCh <- netEvent{users: users, usersUpdated: true}
 		}
 	}
 }

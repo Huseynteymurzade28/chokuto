@@ -8,10 +8,12 @@ import (
 type MessageType string
 
 const (
-	TypeMessage MessageType = "MSG"
-	TypeJoin    MessageType = "JOIN"
-	TypeLeave   MessageType = "LEAVE"
-	TypeFile    MessageType = "FILE"
+	TypeMessage  MessageType = "MSG"
+	TypeJoin     MessageType = "JOIN"
+	TypeLeave    MessageType = "LEAVE"
+	TypeFile     MessageType = "FILE"
+	TypeTyping   MessageType = "TYPING"
+	TypeUserList MessageType = "USERLIST"
 )
 
 type Message struct {

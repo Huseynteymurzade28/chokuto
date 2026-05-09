@@ -2,6 +2,7 @@ package hub
 
 import (
 	"net"
+	"sync"
 )
 
 type Client struct {
@@ -10,62 +11,61 @@ type Client struct {
 	Conn     net.Conn
 }
 
-type envelope struct {
-	data    []byte
-	exclude *Client
-}
-
 type Hub struct {
-	clients    map[*Client]bool
-	broadcast  chan envelope
-	register   chan *Client
-	unregister chan *Client
+	mu      sync.RWMutex
+	clients map[*Client]bool
 }
 
 func New() *Hub {
-	return &Hub{
-		clients:    make(map[*Client]bool),
-		broadcast:  make(chan envelope, 64),
-		register:   make(chan *Client),
-		unregister: make(chan *Client),
-	}
+	return &Hub{clients: make(map[*Client]bool)}
 }
 
 func (h *Hub) Register(c *Client) {
-	h.register <- c
+	h.mu.Lock()
+	h.clients[c] = true
+	h.mu.Unlock()
 }
 
 func (h *Hub) Unregister(c *Client) {
-	h.unregister <- c
+	h.mu.Lock()
+	if _, ok := h.clients[c]; ok {
+		delete(h.clients, c)
+		close(c.Send)
+	}
+	h.mu.Unlock()
 }
 
 func (h *Hub) Broadcast(data []byte) {
-	h.broadcast <- envelope{data: data}
+	h.mu.RLock()
+	defer h.mu.RUnlock()
+	for c := range h.clients {
+		select {
+		case c.Send <- data:
+		default:
+		}
+	}
 }
 
 func (h *Hub) BroadcastExcluding(data []byte, exclude *Client) {
-	h.broadcast <- envelope{data: data, exclude: exclude}
-}
-
-func (h *Hub) Run() {
-	for {
+	h.mu.RLock()
+	defer h.mu.RUnlock()
+	for c := range h.clients {
+		if c == exclude {
+			continue
+		}
 		select {
-		case c := <-h.register:
-			h.clients[c] = true
-
-		case c := <-h.unregister:
-			if _, ok := h.clients[c]; ok {
-				delete(h.clients, c)
-				close(c.Send)
-			}
-
-		case env := <-h.broadcast:
-			for c := range h.clients {
-				if env.exclude != nil && c == env.exclude {
-					continue
-				}
-				c.Send <- env.data
-			}
+		case c.Send <- data:
+		default:
 		}
 	}
+}
+
+func (h *Hub) GetUsernames() []string {
+	h.mu.RLock()
+	defer h.mu.RUnlock()
+	names := make([]string, 0, len(h.clients))
+	for c := range h.clients {
+		names = append(names, c.Username)
+	}
+	return names
 }
