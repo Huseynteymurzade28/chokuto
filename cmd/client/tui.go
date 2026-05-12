@@ -19,29 +19,43 @@ import (
 	"lan-drop/internal/protocol"
 )
 
-const sidebarW = 22
+const sidebarW = 24
 
-// ── styles ────────────────────────────────────────────────────────────────────
+// ── palette ───────────────────────────────────────────────────────────────────
 
 var (
-	activeTabSt  = lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("39")).Underline(true).Padding(0, 1)
-	inactiveTabSt = lipgloss.NewStyle().Foreground(lipgloss.Color("240")).Padding(0, 1)
-	titleSt      = lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("39"))
-	dimSt        = lipgloss.NewStyle().Foreground(lipgloss.Color("240"))
-	joinSt       = lipgloss.NewStyle().Foreground(lipgloss.Color("82")).Italic(true)
-	leaveSt      = lipgloss.NewStyle().Foreground(lipgloss.Color("203")).Italic(true)
-	otherSt      = lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("117"))
-	meSt         = lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("39"))
-	fileSt       = lipgloss.NewStyle().Foreground(lipgloss.Color("220"))
-	errSt        = lipgloss.NewStyle().Foreground(lipgloss.Color("203"))
-	onlineDotSt  = lipgloss.NewStyle().Foreground(lipgloss.Color("82"))
-	offlineDotSt = lipgloss.NewStyle().Foreground(lipgloss.Color("240"))
-	typingSt     = lipgloss.NewStyle().Foreground(lipgloss.Color("240")).Italic(true)
-	sideHeadSt   = lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("252"))
-	youTagSt     = lipgloss.NewStyle().Foreground(lipgloss.Color("240"))
+	clrAccent = lipgloss.Color("75")
+	clrGreen  = lipgloss.Color("82")
+	clrOrange = lipgloss.Color("214")
+	clrRed    = lipgloss.Color("203")
+	clrText   = lipgloss.Color("252")
+	clrDim    = lipgloss.Color("244")
+	clrFaint  = lipgloss.Color("240")
 )
 
-var palette = []string{"39", "213", "82", "220", "205", "87", "214", "51"}
+var (
+	activeTabSt   = lipgloss.NewStyle().Bold(true).Foreground(clrAccent).Underline(true).Padding(0, 1)
+	inactiveTabSt = lipgloss.NewStyle().Foreground(clrFaint).Padding(0, 1)
+	titleSt       = lipgloss.NewStyle().Bold(true).Foreground(clrAccent)
+	dimSt         = lipgloss.NewStyle().Foreground(clrFaint)
+	joinSt        = lipgloss.NewStyle().Foreground(clrGreen).Italic(true)
+	leaveSt       = lipgloss.NewStyle().Foreground(clrRed).Italic(true)
+	meSt          = lipgloss.NewStyle().Bold(true).Foreground(clrAccent)
+	fileSt        = lipgloss.NewStyle().Foreground(clrOrange)
+	errSt         = lipgloss.NewStyle().Foreground(clrRed)
+	onlineDotSt   = lipgloss.NewStyle().Foreground(clrGreen)
+	typingSt      = lipgloss.NewStyle().Foreground(clrFaint).Italic(true)
+	sideHeadSt    = lipgloss.NewStyle().Bold(true).Foreground(clrText)
+	youTagSt      = lipgloss.NewStyle().Foreground(clrFaint)
+
+	fbPathSt   = lipgloss.NewStyle().Bold(true).Foreground(clrDim)
+	fbDirSt    = lipgloss.NewStyle().Bold(true).Foreground(clrAccent)
+	fbFileSt   = lipgloss.NewStyle().Foreground(clrText)
+	fbSizeSt   = lipgloss.NewStyle().Foreground(clrFaint)
+	fbCursorSt = lipgloss.NewStyle().Bold(true).Foreground(clrOrange)
+)
+
+var userPalette = []string{"75", "213", "82", "220", "205", "87", "214", "51"}
 
 func userColor(name string) lipgloss.Color {
 	var h int
@@ -51,11 +65,22 @@ func userColor(name string) lipgloss.Color {
 	if h < 0 {
 		h = -h
 	}
-	return lipgloss.Color(palette[h%len(palette)])
+	return lipgloss.Color(userPalette[h%len(userPalette)])
 }
 
 func styledName(name string) string {
 	return lipgloss.NewStyle().Bold(true).Foreground(userColor(name)).Render(name)
+}
+
+func truncate(s string, maxW int) string {
+	if lipgloss.Width(s) <= maxW {
+		return s
+	}
+	runes := []rune(s)
+	for len(runes) > 0 && lipgloss.Width(string(runes)+"…") > maxW {
+		runes = runes[:len(runes)-1]
+	}
+	return string(runes) + "…"
 }
 
 // ── types ─────────────────────────────────────────────────────────────────────
@@ -98,6 +123,233 @@ type errMsg struct{ err error }
 
 type tickMsg time.Time
 
+// ── fileBrowser ───────────────────────────────────────────────────────────────
+
+type fileBrowser struct {
+	dir        string
+	entries    []os.DirEntry
+	cursor     int
+	offset     int
+	height     int
+	width      int
+	showHidden bool
+}
+
+func newFileBrowser() fileBrowser {
+	homeDir, _ := os.UserHomeDir()
+	dir := homeDir
+	for _, cand := range []string{
+		filepath.Join(homeDir, "Documents"),
+		filepath.Join(homeDir, "Desktop"),
+	} {
+		if _, err := os.Stat(cand); err == nil {
+			dir = cand
+			break
+		}
+	}
+	fb := fileBrowser{dir: dir}
+	fb.reload()
+	return fb
+}
+
+func (fb *fileBrowser) reload() {
+	all, err := os.ReadDir(fb.dir)
+	if err != nil {
+		fb.entries = nil
+		return
+	}
+	var dirs, files []os.DirEntry
+	for _, e := range all {
+		if !fb.showHidden && strings.HasPrefix(e.Name(), ".") {
+			continue
+		}
+		if e.IsDir() {
+			dirs = append(dirs, e)
+		} else {
+			files = append(files, e)
+		}
+	}
+	sort.Slice(dirs, func(i, j int) bool { return dirs[i].Name() < dirs[j].Name() })
+	sort.Slice(files, func(i, j int) bool { return files[i].Name() < files[j].Name() })
+	fb.entries = append(dirs, files...)
+	if fb.cursor >= len(fb.entries) && len(fb.entries) > 0 {
+		fb.cursor = len(fb.entries) - 1
+	}
+}
+
+func (fb *fileBrowser) listH() int {
+	h := fb.height - 2
+	if h < 1 {
+		h = 1
+	}
+	return h
+}
+
+func (fb *fileBrowser) moveUp() {
+	if fb.cursor > 0 {
+		fb.cursor--
+		if fb.cursor < fb.offset {
+			fb.offset = fb.cursor
+		}
+	}
+}
+
+func (fb *fileBrowser) moveDown() {
+	if fb.cursor < len(fb.entries)-1 {
+		fb.cursor++
+		lh := fb.listH()
+		if fb.cursor >= fb.offset+lh {
+			fb.offset = fb.cursor - lh + 1
+		}
+	}
+}
+
+func (fb *fileBrowser) goUp() {
+	parent := filepath.Dir(fb.dir)
+	if parent == fb.dir {
+		return
+	}
+	prev := filepath.Base(fb.dir)
+	fb.dir = parent
+	fb.cursor = 0
+	fb.offset = 0
+	fb.reload()
+	for i, e := range fb.entries {
+		if e.Name() == prev {
+			fb.cursor = i
+			lh := fb.listH()
+			if fb.cursor >= lh {
+				fb.offset = fb.cursor - lh/2
+				if fb.offset < 0 {
+					fb.offset = 0
+				}
+			}
+			break
+		}
+	}
+}
+
+// enter navigates into a directory or returns the selected file path.
+func (fb *fileBrowser) enter() (string, bool) {
+	if len(fb.entries) == 0 || fb.cursor >= len(fb.entries) {
+		return "", false
+	}
+	e := fb.entries[fb.cursor]
+	path := filepath.Join(fb.dir, e.Name())
+	if e.IsDir() {
+		fb.dir = path
+		fb.cursor = 0
+		fb.offset = 0
+		fb.reload()
+		return "", false
+	}
+	return path, true
+}
+
+func (fb *fileBrowser) toggleHidden() {
+	fb.showHidden = !fb.showHidden
+	fb.reload()
+}
+
+func (fb fileBrowser) view() string {
+	homeDir, _ := os.UserHomeDir()
+	display := fb.dir
+	if rel, err := filepath.Rel(homeDir, fb.dir); err == nil && !strings.HasPrefix(rel, "..") {
+		if rel == "." {
+			display = "~"
+		} else {
+			display = "~/" + rel
+		}
+	}
+
+	extra := ""
+	if fb.showHidden {
+		extra = dimSt.Render("  · hidden")
+	}
+
+	var sb strings.Builder
+	sb.WriteString(" " + fbPathSt.Render(display) + extra + "\n")
+	sepW := fb.width - 2
+	if sepW < 1 {
+		sepW = 1
+	}
+	sb.WriteString(" " + dimSt.Render(strings.Repeat("─", sepW)) + "\n")
+
+	lh := fb.listH()
+	end := fb.offset + lh
+	if end > len(fb.entries) {
+		end = len(fb.entries)
+	}
+	visible := fb.entries[fb.offset:end]
+	rendered := 0
+
+	// Layout: " ▶ ▸ <name...>          9.9 MB"
+	//          1  1 1 1 1               9
+	const overhead = 5 + 9 // margin+cursor+sp+icon+sp | size
+	nameMaxW := fb.width - overhead
+	if nameMaxW < 4 {
+		nameMaxW = 4
+	}
+
+	for i, e := range visible {
+		idx := fb.offset + i
+		selected := idx == fb.cursor
+
+		cur := " "
+		if selected {
+			cur = fbCursorSt.Render("▶")
+		}
+
+		rawName := e.Name()
+		var icon, nameStr, sizeStr string
+
+		if e.IsDir() {
+			rawName += "/"
+			icon = fbDirSt.Render("▸")
+			rawName = truncate(rawName, nameMaxW)
+			pad := nameMaxW - lipgloss.Width(rawName)
+			if pad < 0 {
+				pad = 0
+			}
+			nameStr = fbDirSt.Render(rawName) + strings.Repeat(" ", pad)
+			sizeStr = strings.Repeat(" ", 9)
+		} else {
+			icon = " "
+			info, _ := e.Info()
+			size := ""
+			if info != nil {
+				size = fmtSize(info.Size())
+			}
+			rawName = truncate(rawName, nameMaxW)
+			pad := nameMaxW - lipgloss.Width(rawName)
+			if pad < 0 {
+				pad = 0
+			}
+			ns := fbFileSt
+			if selected {
+				ns = fbFileSt.Bold(true)
+			}
+			nameStr = ns.Render(rawName) + strings.Repeat(" ", pad)
+			sizeStr = fbSizeSt.Render(fmt.Sprintf("%9s", size))
+		}
+
+		sb.WriteString(" " + cur + " " + icon + " " + nameStr + sizeStr + "\n")
+		rendered++
+	}
+
+	if len(fb.entries) == 0 {
+		sb.WriteString("   " + dimSt.Render("(empty directory)") + "\n")
+		rendered++
+	}
+
+	for rendered < lh {
+		sb.WriteString("\n")
+		rendered++
+	}
+
+	return strings.TrimRight(sb.String(), "\n")
+}
+
 // ── model ─────────────────────────────────────────────────────────────────────
 
 type model struct {
@@ -105,6 +357,7 @@ type model struct {
 	lines          []chatLine
 	files          []fileEntry
 	vp             viewport.Model
+	fb             fileBrowser
 	input          textinput.Model
 	conn           net.Conn
 	username       string
@@ -124,12 +377,14 @@ func newModel(conn net.Conn, username, server string, eventCh chan netEvent) mod
 	ti.Placeholder = "message..."
 	ti.Focus()
 	ti.CharLimit = 1000
+
 	return model{
 		conn:        conn,
 		username:    username,
 		server:      server,
 		eventCh:     eventCh,
 		input:       ti,
+		fb:          newFileBrowser(),
 		typingUsers: make(map[string]time.Time),
 	}
 }
@@ -143,7 +398,7 @@ func waitNet(ch <-chan netEvent) tea.Cmd {
 }
 
 func doTick() tea.Cmd {
-	return tea.Tick(500*time.Millisecond, func(t time.Time) tea.Msg {
+	return tea.Tick(400*time.Millisecond, func(t time.Time) tea.Msg {
 		return tickMsg(t)
 	})
 }
@@ -167,6 +422,8 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.vp = viewport.New(vpW, vpH)
 		m.vp.SetContent(m.chatContent())
 		m.vp.GotoBottom()
+		m.fb.height = vpH
+		m.fb.width = m.width
 		m.ready = true
 
 	case tickMsg:
@@ -190,32 +447,55 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.tab = tabIdx(1 - int(m.tab))
 			if m.tab == chatTab {
 				m.input.Placeholder = "message..."
+				m.input.Focus()
 			} else {
-				m.input.Placeholder = "/path/to/file"
+				m.input.Reset()
+				m.input.Blur()
+			}
+
+		case "up", "k":
+			if m.tab == filesTab {
+				m.fb.moveUp()
+			}
+
+		case "down", "j":
+			if m.tab == filesTab {
+				m.fb.moveDown()
 			}
 
 		case "enter":
-			val := strings.TrimSpace(m.input.Value())
-			m.input.Reset()
-			if val == "" {
-				break
-			}
-			if m.tab == chatTab {
-				fmt.Fprint(m.conn, protocol.Message{
-					Type: protocol.TypeMessage,
-					From: m.username,
-					Body: val,
-				}.Encode())
-				m.lines = append(m.lines, chatLine{
-					kind: "me", from: m.username, body: val, ts: time.Now(),
-				})
-				m.refreshVP()
+			if m.tab == filesTab {
+				if path, isFile := m.fb.enter(); isFile {
+					cmds = append(cmds, m.doSendFile(path))
+				}
 			} else {
-				cmds = append(cmds, m.doSendFile(val))
+				val := strings.TrimSpace(m.input.Value())
+				m.input.Reset()
+				if val != "" {
+					fmt.Fprint(m.conn, protocol.Message{
+						Type: protocol.TypeMessage,
+						From: m.username,
+						Body: val,
+					}.Encode())
+					m.lines = append(m.lines, chatLine{
+						kind: "me", from: m.username, body: val, ts: time.Now(),
+					})
+					m.refreshVP()
+				}
+			}
+
+		case "backspace", "left":
+			if m.tab == filesTab {
+				m.fb.goUp()
+			}
+
+		case ".":
+			if m.tab == filesTab {
+				m.fb.toggleHidden()
 			}
 		}
 
-		// send typing indicator (debounced to once per second)
+		// debounced typing indicator
 		if m.tab == chatTab && m.input.Value() != prevVal && m.input.Value() != "" {
 			if time.Since(m.lastTypingSent) > time.Second {
 				m.lastTypingSent = time.Now()
@@ -256,6 +536,9 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			body: fmt.Sprintf("sent %s (%s)", msg.name, fmtSize(msg.size)),
 			ts:   time.Now(),
 		})
+		m.tab = chatTab
+		m.input.Placeholder = "message..."
+		m.input.Focus()
 		m.refreshVP()
 
 	case errMsg:
@@ -263,10 +546,12 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.refreshVP()
 	}
 
-	var vpCmd, inputCmd tea.Cmd
-	m.vp, vpCmd = m.vp.Update(msg)
-	m.input, inputCmd = m.input.Update(msg)
-	cmds = append(cmds, vpCmd, inputCmd)
+	if m.tab == chatTab {
+		var vpCmd, inputCmd tea.Cmd
+		m.vp, vpCmd = m.vp.Update(msg)
+		m.input, inputCmd = m.input.Update(msg)
+		cmds = append(cmds, vpCmd, inputCmd)
+	}
 
 	return m, tea.Batch(cmds...)
 }
@@ -274,17 +559,17 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 // ── view ──────────────────────────────────────────────────────────────────────
 
 func (m model) hasSidebar() bool {
-	return m.width >= 60
+	return m.width >= 72
 }
 
 func (m model) View() string {
 	if !m.ready {
-		return "connecting..."
+		return "  connecting..."
 	}
 	return strings.Join([]string{
 		m.viewHeader(),
 		m.viewContent(),
-		m.viewTyping(),
+		m.viewTypingLine(),
 		m.viewInput(),
 		m.viewStatus(),
 	}, "\n")
@@ -300,12 +585,11 @@ func (m model) viewHeader() string {
 		filesLabel = activeTabSt.Render("Files")
 	}
 
-	left := titleSt.Render("lan-drop") + dimSt.Render("  │  ") + chatLabel + dimSt.Render("·") + filesLabel
+	left := titleSt.Render("lan-drop") + dimSt.Render("  ·  ") + chatLabel + dimSt.Render("·") + filesLabel
 
 	right := ""
 	if n := len(m.users); n > 0 {
-		dot := onlineDotSt.Render("●")
-		right = dot + dimSt.Render(fmt.Sprintf(" %d online  ", n))
+		right = onlineDotSt.Render("●") + dimSt.Render(fmt.Sprintf(" %d online  ", n))
 	}
 
 	lw := lipgloss.Width(left)
@@ -321,7 +605,7 @@ func (m model) viewHeader() string {
 
 func (m model) viewContent() string {
 	if m.tab == filesTab {
-		return m.viewFiles()
+		return m.fb.view()
 	}
 	if !m.hasSidebar() {
 		return m.vp.View()
@@ -331,7 +615,6 @@ func (m model) viewContent() string {
 
 func (m model) viewChatWithSidebar() string {
 	chatWidth := m.width - sidebarW - 1
-
 	vpLines := strings.Split(m.vp.View(), "\n")
 	sideLines := m.buildSidebarLines()
 
@@ -341,17 +624,14 @@ func (m model) viewChatWithSidebar() string {
 		if i < len(vpLines) {
 			cl = vpLines[i]
 		}
-		// pad to exact chat width
 		vis := lipgloss.Width(cl)
 		if vis < chatWidth {
 			cl += strings.Repeat(" ", chatWidth-vis)
 		}
-
 		sl := ""
 		if i < len(sideLines) {
 			sl = sideLines[i]
 		}
-
 		sb.WriteString(cl)
 		sb.WriteString(dimSt.Render("│"))
 		sb.WriteString(sl)
@@ -364,11 +644,10 @@ func (m model) viewChatWithSidebar() string {
 
 func (m model) buildSidebarLines() []string {
 	lines := make([]string, 0, m.vp.Height)
-
-	count := fmt.Sprintf(" Online (%d)", len(m.users))
-	lines = append(lines, sideHeadSt.Render(count))
+	lines = append(lines, sideHeadSt.Render(fmt.Sprintf(" Online (%d)", len(m.users))))
 	lines = append(lines, dimSt.Render(" "+strings.Repeat("─", sidebarW-2)))
 
+	now := time.Now()
 	for _, u := range m.users {
 		dot := onlineDotSt.Render("●")
 		name := lipgloss.NewStyle().Bold(true).Foreground(userColor(u)).Render(u)
@@ -376,7 +655,12 @@ func (m model) buildSidebarLines() []string {
 		if u == m.username {
 			you = youTagSt.Render(" (you)")
 		}
-		lines = append(lines, " "+dot+" "+name+you)
+		typing := ""
+		if t, ok := m.typingUsers[u]; ok && now.Sub(t) < 3*time.Second {
+			dots := []string{"·", "··", "···"}[m.typingFrame]
+			typing = typingSt.Render(" " + dots)
+		}
+		lines = append(lines, " "+dot+" "+name+you+typing)
 	}
 
 	for len(lines) < m.vp.Height {
@@ -385,7 +669,11 @@ func (m model) buildSidebarLines() []string {
 	return lines
 }
 
-func (m model) viewTyping() string {
+// viewTypingLine always returns exactly one line so the layout stays stable.
+func (m model) viewTypingLine() string {
+	if m.tab != chatTab {
+		return ""
+	}
 	var who []string
 	now := time.Now()
 	for name, t := range m.typingUsers {
@@ -394,67 +682,41 @@ func (m model) viewTyping() string {
 		}
 	}
 	if len(who) == 0 {
-		return ""
+		return " " // reserve the line without visible content
 	}
 
 	sort.Strings(who)
-	dots := []string{".", "..", "..."}[m.typingFrame]
+	dots := []string{"·", "··", "···"}[m.typingFrame]
 
 	var text string
 	switch len(who) {
 	case 1:
-		text = styledName(who[0]) + typingSt.Render(" is typing"+dots)
+		text = styledName(who[0]) + typingSt.Render(" is typing "+dots)
 	case 2:
-		text = styledName(who[0]) + typingSt.Render(" & ") + styledName(who[1]) + typingSt.Render(" are typing"+dots)
+		text = styledName(who[0]) + typingSt.Render(", ") + styledName(who[1]) + typingSt.Render(" are typing "+dots)
 	default:
-		text = typingSt.Render(fmt.Sprintf("%d people are typing%s", len(who), dots))
+		text = typingSt.Render(fmt.Sprintf("%d people are typing %s", len(who), dots))
 	}
 	return " " + text
 }
 
-func (m model) viewFiles() string {
-	var rows []string
-	if len(m.files) == 0 {
-		rows = append(rows,
-			"",
-			dimSt.Render("  no files received yet"),
-			"",
-			dimSt.Render("  type an absolute file path below and press Enter to send"),
-		)
-	} else {
-		rows = append(rows, "", dimSt.Render("  received files:"), "")
-		for _, f := range m.files {
-			ts := dimSt.Render(f.ts.Format("15:04"))
-			row := fmt.Sprintf("  %s  %s  %s  %s",
-				ts,
-				fileSt.Render(f.filename),
-				dimSt.Render(fmtSize(f.size)),
-				dimSt.Render("← "+f.from),
-			)
-			rows = append(rows, row)
-		}
-	}
-	for len(rows) < m.vp.Height {
-		rows = append(rows, "")
-	}
-	return strings.Join(rows[:m.vp.Height], "\n")
-}
-
 func (m model) viewInput() string {
 	border := dimSt.Render(strings.Repeat("─", m.width))
-	var prefix string
 	if m.tab == filesTab {
-		prefix = fileSt.Render(" send › ")
-	} else {
-		prefix = dimSt.Render(" › ")
+		hint := dimSt.Render("  ↑/↓  navigate    enter  open / send file    ⌫  go up    .  toggle hidden")
+		return border + "\n" + hint
 	}
-	return border + "\n" + prefix + m.input.View()
+	return border + "\n" + dimSt.Render(" › ") + m.input.View()
 }
 
 func (m model) viewStatus() string {
 	userPart := lipgloss.NewStyle().Bold(true).Foreground(userColor(m.username)).Render(m.username)
 	left := " " + userPart + dimSt.Render("@"+m.server)
-	right := dimSt.Render("tab: switch  pgup/dn: scroll  ctrl+q: quit ")
+	hint := "tab: switch  pgup/dn: scroll  ctrl+q: quit "
+	if m.tab == filesTab {
+		hint = "tab: switch  ctrl+q: quit "
+	}
+	right := dimSt.Render(hint)
 	gap := m.width - lipgloss.Width(left) - lipgloss.Width(right)
 	if gap < 0 {
 		gap = 0
@@ -489,18 +751,18 @@ func renderChatLine(l chatLine) string {
 	sep := dimSt.Render(" › ")
 	switch l.kind {
 	case "join":
-		return ts + " " + joinSt.Render("⊕ "+l.body)
+		return ts + " " + joinSt.Render("⊕  "+l.body)
 	case "leave":
-		return ts + " " + leaveSt.Render("⊖ "+l.body)
+		return ts + " " + leaveSt.Render("⊖  "+l.body)
 	case "me":
 		return ts + " " + meSt.Render(l.from) + sep + l.body
 	case "msg":
 		name := lipgloss.NewStyle().Bold(true).Foreground(userColor(l.from)).Render(l.from)
 		return ts + " " + name + sep + l.body
 	case "file":
-		return ts + " " + fileSt.Render("⬇ "+l.from+": "+l.body)
+		return ts + " " + fileSt.Render("⬇  "+l.from+": "+l.body)
 	case "err":
-		return ts + " " + errSt.Render("✗ "+l.body)
+		return ts + " " + errSt.Render("✗  "+l.body)
 	default:
 		return ts + " " + dimSt.Render(l.body)
 	}
@@ -590,7 +852,9 @@ func startNetworkReader(conn net.Conn, username string, eventCh chan<- netEvent)
 			}
 			eventCh <- netEvent{line: chatLine{kind: "msg", from: msg.From, body: msg.Body, ts: time.Now()}}
 		case protocol.TypeTyping:
-			eventCh <- netEvent{typing: msg.From}
+			if msg.From != username {
+				eventCh <- netEvent{typing: msg.From}
+			}
 		case protocol.TypeUserList:
 			body := strings.TrimSpace(msg.Body)
 			var users []string
