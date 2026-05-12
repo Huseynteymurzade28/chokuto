@@ -437,8 +437,6 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		cmds = append(cmds, doTick())
 
 	case tea.KeyMsg:
-		prevVal := m.input.Value()
-
 		switch msg.String() {
 		case "ctrl+c", "ctrl+q":
 			return m, tea.Quit
@@ -495,8 +493,10 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			}
 		}
 
-		// debounced typing indicator
-		if m.tab == chatTab && m.input.Value() != prevVal && m.input.Value() != "" {
+		// debounced typing indicator — check the key itself, not input.Value()
+		// (input is updated later via m.input.Update, so Value() hasn't changed yet here)
+		k := msg.String()
+		if m.tab == chatTab && (len([]rune(k)) == 1 || k == "backspace") {
 			if time.Since(m.lastTypingSent) > time.Second {
 				m.lastTypingSent = time.Now()
 				fmt.Fprint(m.conn, protocol.Message{
