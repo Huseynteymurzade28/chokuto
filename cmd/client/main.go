@@ -45,6 +45,8 @@ func main() {
 
 	p := tea.NewProgram(
 		newModel(conn, username, serverAddr, eventCh),
+		tea.WithInput(os.Stdin),
+		tea.WithOutput(os.Stdout),
 	)
 	if _, err := p.Run(); err != nil {
 		log.Fatal(err)
