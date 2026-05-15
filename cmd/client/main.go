@@ -45,7 +45,6 @@ func main() {
 
 	p := tea.NewProgram(
 		newModel(conn, username, serverAddr, eventCh),
-		tea.WithAltScreen(),
 	)
 	if _, err := p.Run(); err != nil {
 		log.Fatal(err)

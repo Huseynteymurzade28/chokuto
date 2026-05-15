@@ -378,13 +378,25 @@ func newModel(conn net.Conn, username, server string, eventCh chan netEvent) mod
 	ti.Focus()
 	ti.CharLimit = 1000
 
+	const defaultW, defaultH = 80, 24
+	vpH := defaultH - 6
+	fb := newFileBrowser()
+	fb.height = vpH
+	fb.width = defaultW
+	vp := viewport.New(defaultW, vpH)
+	vp.SetContent(dimSt.Render("  no messages yet – start typing below"))
+
 	return model{
 		conn:        conn,
 		username:    username,
 		server:      server,
 		eventCh:     eventCh,
 		input:       ti,
-		fb:          newFileBrowser(),
+		fb:          fb,
+		vp:          vp,
+		width:       defaultW,
+		height:      defaultH,
+		ready:       true,
 		typingUsers: make(map[string]time.Time),
 	}
 }
