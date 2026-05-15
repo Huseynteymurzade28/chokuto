@@ -52,6 +52,7 @@ func main() {
 
 	p := tea.NewProgram(
 		newModel(conn, username, serverAddr, eventCh),
+		tea.WithAltScreen(),
 		tea.WithInput(os.Stdin),
 		tea.WithOutput(os.Stdout),
 	)
