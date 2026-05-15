@@ -18,6 +18,13 @@ func main() {
 	if len(os.Args) < 2 {
 		log.Fatal("usage: client <username> [serverAddr]")
 	}
+
+	// colorprofile v0.4+ queries the terminal via OSC sequences to detect
+	// color support; terminals that don't respond (e.g. Termux) cause a hang.
+	// Setting COLORTERM bypasses the active query.
+	if os.Getenv("COLORTERM") == "" {
+		os.Setenv("COLORTERM", "truecolor")
+	}
 	username := os.Args[1]
 
 	var serverAddr string
