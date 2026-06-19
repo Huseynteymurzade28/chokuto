@@ -34,7 +34,7 @@ lan-drop  │  Chat · Files                                  ● 3 online
 
 | Requirement | Version |
 |-------------|---------|
-| Go | 1.21 or newer |
+| Go | 1.24 or newer (only to build) |
 | OS | Linux, macOS, Windows (any terminal with ANSI support) |
 
 Both machines must be on the **same local network** (same Wi-Fi, LAN, or VPN subnet).
@@ -147,7 +147,7 @@ The relay core, usable two ways: `Run` (blocking, used by the `cmd/server` binar
 Thread-safe registry of connected clients. Supports `Register`, `Unregister`, `Broadcast`, `BroadcastExcluding`, and `SendTo` (for direct messages). Sends are file-safe: a live client never has frames dropped, while a departed client never blocks the sender.
 
 **Transport** (`internal/transport`)  
-Wraps each TCP connection in **length-prefixed frames**. On a private room the payload is sealed with AES-256-GCM using a key derived from the room password via `scrypt`; on a public room frames are sent in the clear. Because every frame is self-delimited, file bytes can be chunked and interleaved safely with chat traffic.
+Wraps each TCP connection in **length-prefixed frames**. On a private room the payload is sealed with AES-256-GCM using a key derived from the room password via PBKDF2 (`crypto/pbkdf2`, stdlib); on a public room frames are sent in the clear. Because every frame is self-delimited, file bytes can be chunked and interleaved safely with chat traffic.
 
 **Discovery** (`internal/discovery`)  
 Server side: listens on UDP 9999, responds `LANDROP_HERE:<port>:<private>:<name>` to any `LANDROP_DISCOVER` probe.  
@@ -256,7 +256,8 @@ Ensure your terminal supports 256 colors and UTF-8. Most modern terminals (iTerm
 | [charmbracelet/bubbletea](https://github.com/charmbracelet/bubbletea) | TUI framework (Elm architecture) |
 | [charmbracelet/bubbles](https://github.com/charmbracelet/bubbles) | Text input, viewport, and progress bar components |
 | [charmbracelet/lipgloss](https://github.com/charmbracelet/lipgloss) | Terminal color and layout styling |
-| [golang.org/x/crypto](https://pkg.go.dev/golang.org/x/crypto) | `scrypt` key derivation for room encryption |
+
+Room encryption (AES-256-GCM + PBKDF2 key derivation) uses only the Go standard library — no third-party crypto dependency.
 
 ## License
 

@@ -20,16 +20,15 @@ type ServerInfo struct {
 	Private bool
 }
 
-// ListenAndRespond answers discovery probes, advertising the server's name and
-// whether it is password protected.
-func ListenAndRespond(chatPort, name string, private bool) {
+// Serve answers discovery probes in the background, advertising the server's
+// name and whether it is password protected. The returned function stops the
+// responder (closing the UDP socket); call it when the server shuts down.
+func Serve(chatPort, name string, private bool) (stop func(), err error) {
 	addr := &net.UDPAddr{Port: discoverPort}
 	conn, err := net.ListenUDP("udp4", addr)
 	if err != nil {
-		fmt.Println("discovery listen failed:", err)
-		return
+		return nil, err
 	}
-	defer conn.Close()
 
 	priv := "0"
 	if private {
@@ -38,17 +37,20 @@ func ListenAndRespond(chatPort, name string, private bool) {
 	// Name is sanitised so the colon-delimited reply stays parseable.
 	name = strings.ReplaceAll(name, ":", " ")
 
-	buf := make([]byte, 1024)
-	for {
-		n, remoteAddr, err := conn.ReadFromUDP(buf)
-		if err != nil {
-			continue
+	go func() {
+		buf := make([]byte, 1024)
+		for {
+			n, remoteAddr, err := conn.ReadFromUDP(buf)
+			if err != nil {
+				return // socket closed via stop()
+			}
+			if string(buf[:n]) == discoverMsg {
+				reply := fmt.Sprintf("%s:%s:%s:%s", hereMsg, chatPort, priv, name)
+				conn.WriteToUDP([]byte(reply), remoteAddr)
+			}
 		}
-		if string(buf[:n]) == discoverMsg {
-			reply := fmt.Sprintf("%s:%s:%s:%s", hereMsg, chatPort, priv, name)
-			conn.WriteToUDP([]byte(reply), remoteAddr)
-		}
-	}
+	}()
+	return func() { conn.Close() }, nil
 }
 
 func parseReply(raw string, remoteIP string) (ServerInfo, bool) {

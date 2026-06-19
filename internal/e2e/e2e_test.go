@@ -194,6 +194,14 @@ func TestFileTransfer(t *testing.T) {
 }
 
 func TestDiscovery(t *testing.T) {
+	// Discovery binds UDP 9999. If another chokuto server is already running on
+	// this machine it owns that port, so our test server can't answer probes.
+	if c, err := net.ListenUDP("udp4", &net.UDPAddr{Port: 9999}); err != nil {
+		t.Skip("UDP 9999 is busy (another chokuto server is running); skipping")
+	} else {
+		c.Close()
+	}
+
 	startServer(t, "s3cret", 18114)
 	time.Sleep(150 * time.Millisecond)
 

@@ -79,9 +79,9 @@ func main() {
 		key = k
 	}
 
-	rawConn, err := net.Dial("tcp", addr)
+	rawConn, err := net.DialTimeout("tcp", addr, 8*time.Second)
 	if err != nil {
-		log.Fatalf("could not connect to %s: %v", addr, err)
+		log.Fatalf("could not connect to %s: %v\n(are both devices on the same Wi-Fi? is the room running on that address?)", addr, err)
 	}
 	defer rawConn.Close()
 

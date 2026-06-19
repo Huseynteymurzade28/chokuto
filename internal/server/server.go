@@ -24,11 +24,12 @@ type Options struct {
 
 // Instance is a running server.
 type Instance struct {
-	Name     string
-	Addr     string // host:port clients connect to (loopback for in-process hosting)
-	Port     string
-	Private  bool
-	listener net.Listener
+	Name          string
+	Addr          string // host:port clients connect to (loopback for in-process hosting)
+	Port          string
+	Private       bool
+	listener      net.Listener
+	stopDiscovery func()
 }
 
 // Start begins listening and serving in the background, returning once the
@@ -68,8 +69,11 @@ func Start(opts Options) (*Instance, error) {
 		listener: ln,
 	}
 
+	if stop, derr := discovery.Serve(actualPort, opts.Name, private); derr == nil {
+		inst.stopDiscovery = stop
+	}
+
 	h := hub.New()
-	go discovery.ListenAndRespond(actualPort, opts.Name, private)
 	go func() {
 		for {
 			conn, err := ln.Accept()
@@ -82,10 +86,13 @@ func Start(opts Options) (*Instance, error) {
 	return inst, nil
 }
 
-// Stop shuts down the listener.
+// Stop shuts down the listener and stops answering discovery probes.
 func (i *Instance) Stop() {
 	if i.listener != nil {
 		i.listener.Close()
+	}
+	if i.stopDiscovery != nil {
+		i.stopDiscovery()
 	}
 }
 

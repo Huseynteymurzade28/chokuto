@@ -11,15 +11,15 @@ import (
 	"bufio"
 	"crypto/aes"
 	"crypto/cipher"
+	"crypto/pbkdf2"
 	"crypto/rand"
+	"crypto/sha256"
 	"encoding/binary"
 	"fmt"
 	"io"
 	"net"
 	"sync"
 	"time"
-
-	"golang.org/x/crypto/scrypt"
 )
 
 // maxFrame caps a single frame to guard against malformed/hostile length
@@ -31,9 +31,10 @@ const maxFrame = 16 << 20 // 16 MiB
 // meant for use over the public internet.
 var appSalt = []byte("chokuto-lan-drop-v1")
 
-// DeriveKey turns a room password into a 32-byte AES-256 key.
+// DeriveKey turns a room password into a 32-byte AES-256 key using PBKDF2
+// (stdlib, Go 1.24+). A fixed salt keeps the build dependency-free; see appSalt.
 func DeriveKey(pass string) ([]byte, error) {
-	return scrypt.Key([]byte(pass), appSalt, 1<<15, 8, 1, 32)
+	return pbkdf2.Key(sha256.New, pass, appSalt, 200000, 32)
 }
 
 // Conn wraps a net.Conn with message framing and optional encryption.
