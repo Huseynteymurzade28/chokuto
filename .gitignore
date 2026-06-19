@@ -1,3 +1,8 @@
-client
-server
+# Compiled binaries at the repo root (build them locally; do not commit).
+# Leading slash anchors to root so it does NOT match the cmd/client, cmd/server
+# or internal/server source directories.
+/client
+/server
+/client-*
+/server-*
 *.exe

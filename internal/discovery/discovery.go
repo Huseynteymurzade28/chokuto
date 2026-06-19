@@ -3,6 +3,7 @@ package discovery
 import (
 	"fmt"
 	"net"
+	"strings"
 	"time"
 )
 
@@ -12,7 +13,16 @@ const (
 	discoverPort = 9999
 )
 
-func ListenAndRespond(chatPort string) {
+// ServerInfo describes a server found on the LAN.
+type ServerInfo struct {
+	Name    string
+	Addr    string // host:port
+	Private bool
+}
+
+// ListenAndRespond answers discovery probes, advertising the server's name and
+// whether it is password protected.
+func ListenAndRespond(chatPort, name string, private bool) {
 	addr := &net.UDPAddr{Port: discoverPort}
 	conn, err := net.ListenUDP("udp4", addr)
 	if err != nil {
@@ -21,6 +31,13 @@ func ListenAndRespond(chatPort string) {
 	}
 	defer conn.Close()
 
+	priv := "0"
+	if private {
+		priv = "1"
+	}
+	// Name is sanitised so the colon-delimited reply stays parseable.
+	name = strings.ReplaceAll(name, ":", " ")
+
 	buf := make([]byte, 1024)
 	for {
 		n, remoteAddr, err := conn.ReadFromUDP(buf)
@@ -28,56 +45,65 @@ func ListenAndRespond(chatPort string) {
 			continue
 		}
 		if string(buf[:n]) == discoverMsg {
-			reply := fmt.Sprintf("%s:%s", hereMsg, chatPort)
+			reply := fmt.Sprintf("%s:%s:%s:%s", hereMsg, chatPort, priv, name)
 			conn.WriteToUDP([]byte(reply), remoteAddr)
 		}
 	}
 }
 
-func probe(conn *net.UDPConn, target *net.UDPAddr, deadline time.Time) (string, error) {
-	conn.SetDeadline(deadline)
-	if _, err := conn.WriteToUDP([]byte(discoverMsg), target); err != nil {
-		return "", err
+func parseReply(raw string, remoteIP string) (ServerInfo, bool) {
+	// LANDROP_HERE:<port>:<priv>:<name>
+	parts := strings.SplitN(raw, ":", 4)
+	if len(parts) != 4 || parts[0] != hereMsg {
+		return ServerInfo{}, false
 	}
-	buf := make([]byte, 1024)
-	n, remoteAddr, err := conn.ReadFromUDP(buf)
-	if err != nil {
-		return "", err
-	}
-	msg := string(buf[:n])
-	if len(msg) <= len(hereMsg)+1 {
-		return "", fmt.Errorf("invalid response")
-	}
-	port := msg[len(hereMsg)+1:]
-	ip := remoteAddr.IP.String()
-	if ip == "0.0.0.0" || ip == "<nil>" {
+	ip := remoteIP
+	if ip == "0.0.0.0" || ip == "<nil>" || ip == "" {
 		ip = "127.0.0.1"
 	}
-	return fmt.Sprintf("%s:%s", ip, port), nil
+	return ServerInfo{
+		Name:    parts[3],
+		Addr:    fmt.Sprintf("%s:%s", ip, parts[1]),
+		Private: parts[2] == "1",
+	}, true
 }
 
-func FindServer(timeout time.Duration) (string, error) {
+// FindServers broadcasts a probe and collects every server that replies within
+// the timeout window, de-duplicated by address.
+func FindServers(timeout time.Duration) []ServerInfo {
 	conn, err := net.ListenUDP("udp4", &net.UDPAddr{Port: 0})
 	if err != nil {
-		return "", err
+		return nil
 	}
 	defer conn.Close()
 
+	// Probe localhost (Linux does not loop broadcast back to the sender) and the
+	// LAN broadcast address.
+	targets := []*net.UDPAddr{
+		{IP: net.IPv4(127, 0, 0, 1), Port: discoverPort},
+		{IP: net.IPv4(255, 255, 255, 255), Port: discoverPort},
+	}
+	for _, t := range targets {
+		conn.WriteToUDP([]byte(discoverMsg), t)
+	}
+
 	deadline := time.Now().Add(timeout)
-	slice := timeout / 3
+	conn.SetReadDeadline(deadline)
 
-	// Try localhost first (client and server on same machine).
-	// Linux does not loop broadcast back to the sender's machine.
-	localhost := &net.UDPAddr{IP: net.IPv4(127, 0, 0, 1), Port: discoverPort}
-	if addr, err := probe(conn, localhost, time.Now().Add(slice)); err == nil {
-		return addr, nil
+	seen := make(map[string]bool)
+	var servers []ServerInfo
+	buf := make([]byte, 1024)
+	for {
+		n, remoteAddr, err := conn.ReadFromUDP(buf)
+		if err != nil {
+			break // timeout
+		}
+		info, ok := parseReply(string(buf[:n]), remoteAddr.IP.String())
+		if !ok || seen[info.Addr] {
+			continue
+		}
+		seen[info.Addr] = true
+		servers = append(servers, info)
 	}
-
-	// Fall back to LAN broadcast.
-	broadcast := &net.UDPAddr{IP: net.IPv4(255, 255, 255, 255), Port: discoverPort}
-	if addr, err := probe(conn, broadcast, deadline); err == nil {
-		return addr, nil
-	}
-
-	return "", fmt.Errorf("server not found")
+	return servers
 }
