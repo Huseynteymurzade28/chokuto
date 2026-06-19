@@ -109,10 +109,10 @@ func main() {
 	progressCh := make(chan transferMsg, 64)
 	go startNetworkReader(conn, username, eventCh)
 
-	history := loadHistory(addr)
+	history := loadHistory(displayName)
 
 	p := tea.NewProgram(
-		newModel(conn, username, addr, password != "", history, eventCh, progressCh),
+		newModel(conn, username, addr, displayName, password != "", history, eventCh, progressCh),
 		tea.WithAltScreen(),
 		tea.WithInput(os.Stdin),
 		tea.WithOutput(os.Stdout),

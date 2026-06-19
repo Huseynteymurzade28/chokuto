@@ -385,6 +385,7 @@ type model struct {
 	conn           *transport.Conn
 	username       string
 	server         string
+	histID         string // history file key (room name, stable across reconnects)
 	private        bool
 	eventCh        chan netEvent
 	progressCh     chan transferMsg
@@ -414,7 +415,7 @@ func browserH(vpH int) int {
 	return h
 }
 
-func newModel(conn *transport.Conn, username, server string, private bool, history []chatLine, eventCh chan netEvent, progressCh chan transferMsg) model {
+func newModel(conn *transport.Conn, username, server, histID string, private bool, history []chatLine, eventCh chan netEvent, progressCh chan transferMsg) model {
 	ti := textinput.New()
 	ti.Placeholder = "message...  (/dm <user> msg · drop a file path to send)"
 	ti.Focus()
@@ -439,6 +440,7 @@ func newModel(conn *transport.Conn, username, server string, private bool, histo
 		conn:        conn,
 		username:    username,
 		server:      server,
+		histID:      histID,
 		private:     private,
 		eventCh:     eventCh,
 		progressCh:  progressCh,
@@ -1070,7 +1072,7 @@ func (m model) viewStatus() string {
 // record appends a line, persists it to history (if persistent), and scrolls.
 func (m *model) record(l chatLine) {
 	m.lines = append(m.lines, l)
-	appendHistory(m.server, l)
+	appendHistory(m.histID, l)
 	m.refreshVP()
 }
 
